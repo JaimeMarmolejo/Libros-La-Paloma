@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Catálogo Visual de la Biblioteca (Online)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 2em;
+      background: linear-gradient(to right, #f5f7fa, #c3cfe2);
+      min-height: 100vh;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 0.5em;
+      color: #333;
+    }
+    #search {
+      display: block;
+      margin: 0 auto 2em auto;
+      padding: 0.5em;
+      font-size: 1em;
+      width: 100%;
+      max-width: 400px;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+    #books {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1em;
+    }
+    .book {
+      background: white;
+      padding: 1em;
+      border-radius: 10px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      text-align: center;
+    }
+    .book img {
+      max-height: 250px;
+      margin-bottom: 0.5em;
+    }
+    .book h3 {
+      font-size: 1em;
+      margin: 0.5em 0 0.2em;
+    }
+    .book p {
+      margin: 0.2em 0;
+      font-size: 0.9em;
+    }
+    .estado {
+      font-weight: bold;
+      color: #007B00;
+    }
+    .estado.prestado {
+      color: #B00020;
+    }
+    .devolucion {
+      font-size: 0.85em;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <h1>Catálogo Visual de la Biblioteca (Online)</h1>
+  <input type="text" id="search" placeholder="Buscar por título, autor o ISBN...">
+  <div id="books">Cargando catálogo...</div>
+
+  <script>
+    const CSV_URL = 'https://raw.githubusercontent.com/JaimeMarmolejo/Libros-La-Paloma/main/ejemplares.csv';
+
+    async function getCoverUrl(isbn, titulo, autor) {
+      const limpio = isbn.replace(/[^0-9Xx]/g, '');
+
+      const portadaPorISBN = `https://covers.openlibrary.org/b/isbn/${limpio}-L.jpg`;
+      try {
+        const res = await fetch(portadaPorISBN, { method: 'HEAD' });
+        if (res.ok) return portadaPorISBN;
+      } catch (e) {}
+
+      const encodedTitle = encodeURIComponent(titulo);
+      const portadaPorTitulo = `https://covers.openlibrary.org/b/title/${encodedTitle}-L.jpg`;
+      try {
+        const res = await fetch(portadaPorTitulo, { method: 'HEAD' });
+        if (res.ok) return portadaPorTitulo;
+      } catch (e) {}
+
+      try {
+        const q = `https://openlibrary.org/search.json?title=${encodeURIComponent(titulo)}&author=${encodeURIComponent(autor)}`;
+        const response = await fetch(q);
+        const data = await response.json();
+        if (data.docs && data.docs.length > 0 && data.docs[0].cover_i) {
+          return `https://covers.openlibrary.org/b/id/${data.docs[0].cover_i}-L.jpg`;
+        }
+      } catch (e) {}
+
+      try {
+        const q = `https://www.googleapis.com/books/v1/volumes?q=intitle:${encodeURIComponent(titulo)}+inauthor:${encodeURIComponent(autor)}`;
+        const response = await fetch(q);
+        const data = await response.json();
+        if (data.items && data.items.length > 0) {
+          const image = data.items[0].volumeInfo.imageLinks;
+          if (image && image.thumbnail) {
+            return image.thumbnail.replace('http:', 'https:');
+          }
+        }
+      } catch (e) {}
+
+      return 'https://via.placeholder.com/150x220?text=Sin+portada';
+    }
+
+    const container = document.getElementById('books');
+    const searchInput = document.getElementById('search');
+    let libros = [];
+    let renderToken = 0;
+
+    function normalizar(texto) {
+      return texto
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/\p{Diacritic}/gu, "");
+    }
+
+    function coincideBusqueda(campoTexto, filtro) {
+      const palabrasFiltro = normalizar(filtro).split(/\s+/);
+      const texto = normalizar(campoTexto);
+      return palabrasFiltro.every(palabra => texto.includes(palabra));
+    }
+
+    async function renderBooks(filtro = '') {
+      const currentToken = ++renderToken;
+      container.innerHTML = '';
+
+      for (const book of libros) {
+        if (currentToken !== renderToken) return;
+
+        const campoBusqueda = `${book['Título']} ${book['Autor']} ${book['ISBN']}`;
+        if (!coincideBusqueda(campoBusqueda, filtro)) continue;
+
+        const estadoPrestado = book['Estado']?.toLowerCase().includes('prestado');
+        const estadoClase = estadoPrestado ? 'prestado' : 'disponible';
+
+        const card = document.createElement('div');
+        card.className = 'book';
+        const portada = await getCoverUrl(book['ISBN'], book['Título'], book['Autor']);
+
+        if (currentToken !== renderToken) return;
+
+        card.innerHTML = `
+          <img src="${portada}" alt="Portada de ${book['Título']}">
+          <h3>${book['Título']}</h3>
+          <p><em>${book['Autor']}</em></p>
+          <p>ISBN: ${book['ISBN']}</p>
+          <p class="estado ${estadoClase}">${book['Estado']}</p>
+          ${estadoPrestado && book['Devolución'] ? `<p class="devolucion">Devuelve antes del: ${book['Devolución']}</p>` : ''}
+        `;
+        container.appendChild(card);
+      }
+    }
+
+    searchInput.addEventListener('input', () => {
+      renderBooks(searchInput.value);
+    });
+
+    Papa.parse(CSV_URL, {
+      download: true,
+      header: true,
+      complete: function(results) {
+        libros = results.data;
+        renderBooks();
+      }
+    });
+  </script>
+</body>
+</html>
